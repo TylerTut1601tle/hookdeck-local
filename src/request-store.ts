@@ -1,52 +1,63 @@
-import { randomUUID } from 'crypto';
-import { RequestLog } from './logger';
-
-export interface RequestStore {
-  add(entry: Omit<RequestLog, 'id' | 'timestamp'>): RequestLog;
-  update(id: string, patch: Partial<RequestLog>): RequestLog | undefined;
-  get(id: string): RequestLog | undefined;
-  list(limit?: number): RequestLog[];
-  clear(): void;
+export interface StoredRequest {
+  id: string;
+  method: string;
+  url: string;
+  headers: Record<string, string | string[]>;
+  body: string;
+  timestamp: number;
+  response?: {
+    status: number;
+    headers: Record<string, string | string[]>;
+    body: string;
+  };
 }
 
-export function createRequestStore(maxEntries = 200): RequestStore {
-  const store = new Map<string, RequestLog>();
-  const order: string[] = [];
+export interface RequestStore {
+  add(request: StoredRequest): void;
+  get(id: string): StoredRequest | undefined;
+  list(): StoredRequest[];
+  clear(): void;
+  purgeAll(): number;
+  purgeOlderThan(cutoffMs: number): number;
+}
+
+export function createRequestStore(): RequestStore {
+  const requests: Map<string, StoredRequest> = new Map();
 
   return {
-    add(entry) {
-      const id = randomUUID();
-      const timestamp = new Date().toISOString();
-      const log: RequestLog = { id, timestamp, ...entry };
-      store.set(id, log);
-      order.push(id);
-      if (order.length > maxEntries) {
-        const oldest = order.shift()!;
-        store.delete(oldest);
+    add(request: StoredRequest): void {
+      requests.set(request.id, request);
+    },
+
+    get(id: string): StoredRequest | undefined {
+      return requests.get(id);
+    },
+
+    list(): StoredRequest[] {
+      return Array.from(requests.values()).sort(
+        (a, b) => b.timestamp - a.timestamp
+      );
+    },
+
+    clear(): void {
+      requests.clear();
+    },
+
+    purgeAll(): number {
+      const count = requests.size;
+      requests.clear();
+      return count;
+    },
+
+    purgeOlderThan(cutoffMs: number): number {
+      let count = 0;
+      for (const [id, req] of requests.entries()) {
+        if (req.timestamp < cutoffMs) {
+          requests.delete(id);
+          count++;
+        }
       }
-      return log;
-    },
-
-    update(id, patch) {
-      const existing = store.get(id);
-      if (!existing) return undefined;
-      const updated = { ...existing, ...patch, id };
-      store.set(id, updated);
-      return updated;
-    },
-
-    get(id) {
-      return store.get(id);
-    },
-
-    list(limit = 50) {
-      const ids = order.slice(-limit).reverse();
-      return ids.map((id) => store.get(id)!).filter(Boolean);
-    },
-
-    clear() {
-      store.clear();
-      order.length = 0;
+      return count;
     },
   };
 }
