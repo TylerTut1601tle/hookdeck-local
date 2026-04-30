@@ -60,4 +60,8 @@ describe("createServer", () => {
     await instance.stop();
     expect(instance.server.listening).toBe(false);
   });
+
+  it("does not throw when stop is called before start", async () => {
+    await expect(instance.stop()).resolves.not.toThrow();
+  });
 });
