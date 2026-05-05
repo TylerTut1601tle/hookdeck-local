@@ -27,7 +27,11 @@ export function createServer(configPath?: string): ServerInstance {
   return {
     server,
     start(): Promise<void> {
-      return new Promise((resolve) => {
+      return new Promise((resolve, reject) => {
+        server.on("error", (err) => {
+          logger.error(`Failed to start server: ${err.message}`);
+          reject(err);
+        });
         server.listen(config.port, () => {
           logger.info(`hookdeck-local listening on port ${config.port}`);
           logger.info(`Forwarding to: ${config.targetUrl}`);
