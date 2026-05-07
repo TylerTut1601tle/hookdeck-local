@@ -34,7 +34,7 @@ export function createDuplicateRequestsHandler(
       status: null,
       duration: null,
       tags: [...(original.tags ?? [])],
-      note: original.note ? `[Duplicate of ${id}] ${original.note}` : `[Duplicate of ${id}]`,
+      note: buildDuplicateNote(id, original.note),
       bookmarked: false,
       archived: false,
     });
@@ -42,4 +42,13 @@ export function createDuplicateRequestsHandler(
     res.writeHead(201, { "Content-Type": "application/json" });
     res.end(JSON.stringify(duplicated));
   };
+}
+
+/**
+ * Builds the note for a duplicated request, prepending a reference to the
+ * original request id. If the original had a note, it is preserved.
+ */
+function buildDuplicateNote(originalId: string, existingNote?: string | null): string {
+  const prefix = `[Duplicate of ${originalId}]`;
+  return existingNote ? `${prefix} ${existingNote}` : prefix;
 }
