@@ -30,7 +30,7 @@ export function replayRequest(
       ...options.overrideHeaders,
     };
 
-    // Remove host header so it's set correctly
+    // Remove host header so it's set correctly for the target
     delete headers['host'];
 
     const reqOptions = {
@@ -55,9 +55,12 @@ export function replayRequest(
           durationMs: Date.now() - start,
         });
       });
+      res.on('error', reject);
     });
 
-    req.on('error', reject);
+    req.on('error', (err) => {
+      reject(new Error(`Replay request failed for ${stored.id}: ${err.message}`));
+    });
 
     if (stored.body) {
       req.write(stored.body);
