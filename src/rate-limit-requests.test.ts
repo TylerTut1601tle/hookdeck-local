@@ -1,79 +1,84 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { IncomingMessage, ServerResponse } from "http";
+import { describe, it, expect, beforeEach, mock } from "bun:test";
 import { computeRateLimit, createRateLimitRequestsHandler } from "./rate-limit-requests";
 import { createRequestStore } from "./request-store";
+import { IncomingMessage, ServerResponse } from "http";
 
-function makeStore(entries: { timestamp: string }[] = []) {
-  const store = createRequestStore();
-  for (const e of entries) {
-    store.add({ id: Math.random().toString(36).slice(2), method: "POST", url: "/hook", headers: {}, body: "", timestamp: e.timestamp, response: null } as any);
-  }
-  return store;
+function makeStore() {
+  return createRequestStore();
 }
 
-function makeMockRes() {
-  const res = { statusCode: 0, headers: {} as Record<string, string>, body: "" } as any;
-  res.writeHead = (code: number, headers: Record<string, string>) => {
-    res.statusCode = code;
-    res.headers = { ...res.headers, ...headers };
-  };
-  res.end = (data: string) => { res.body = data; };
-  return res as ServerResponse;
+function makeMockRes(): ServerResponse {
+  const chunks: string[] = [];
+  return {
+    writeHead: mock(() => {}),
+    end: mock((body: string) => chunks.push(body)),
+    _chunks: chunks,
+  } as unknown as ServerResponse;
 }
 
-function makeMockReq() {
-  return {} as IncomingMessage;
+function makeMockReq(url: string): IncomingMessage {
+  return { method: "GET", url } as IncomingMessage;
 }
 
 describe("computeRateLimit", () => {
-  it("returns allowed=true when under limit", () => {
-    const now = Date.now();
-    const requests = [{ timestamp: new Date(now - 1000).toISOString() }] as any;
-    const result = computeRateLimit(requests, 60000, 10);
-    expect(result.allowed).toBe(true);
-    expect(result.count).toBe(1);
-    expect(result.remaining).toBe(9);
+  it("returns zeros for empty store", () => {
+    const store = makeStore();
+    const result = computeRateLimit(store.getAll(), 60);
+    expect(result.total).toBe(0);
+    expect(result.rate_per_second).toBe(0);
+    expect(result.rate_per_minute).toBe(0);
+    expect(result.breakdown).toEqual({});
   });
 
-  it("returns allowed=false when at limit", () => {
+  it("counts requests within the window", () => {
+    const store = makeStore();
     const now = Date.now();
-    const requests = Array.from({ length: 5 }, (_, i) => ({
-      timestamp: new Date(now - i * 100).toISOString(),
-    })) as any;
-    const result = computeRateLimit(requests, 60000, 5);
-    expect(result.allowed).toBe(false);
-    expect(result.remaining).toBe(0);
+    store.add({ id: "1", method: "POST", url: "/hook", headers: {}, body: "", timestamp: now - 10000, status: 200, duration: 50, tags: [], note: "", bookmarked: false, archived: false, pinned: false });
+    store.add({ id: "2", method: "POST", url: "/hook", headers: {}, body: "", timestamp: now - 20000, status: 200, duration: 50, tags: [], note: "", bookmarked: false, archived: false, pinned: false });
+    store.add({ id: "3", method: "GET", url: "/ping", headers: {}, body: "", timestamp: now - 5000, status: 200, duration: 10, tags: [], note: "", bookmarked: false, archived: false, pinned: false });
+    const result = computeRateLimit(store.getAll(), 60);
+    expect(result.total).toBe(3);
+    expect(result.breakdown["POST /hook"]).toBe(2);
+    expect(result.breakdown["GET /ping"]).toBe(1);
   });
 
-  it("ignores requests outside the window", () => {
+  it("excludes requests outside the window", () => {
+    const store = makeStore();
     const now = Date.now();
-    const requests = [
-      { timestamp: new Date(now - 120000).toISOString() },
-      { timestamp: new Date(now - 500).toISOString() },
-    ] as any;
-    const result = computeRateLimit(requests, 60000, 5);
-    expect(result.count).toBe(1);
+    store.add({ id: "1", method: "POST", url: "/hook", headers: {}, body: "", timestamp: now - 120000, status: 200, duration: 50, tags: [], note: "", bookmarked: false, archived: false, pinned: false });
+    store.add({ id: "2", method: "POST", url: "/hook", headers: {}, body: "", timestamp: now - 10000, status: 200, duration: 50, tags: [], note: "", bookmarked: false, archived: false, pinned: false });
+    const result = computeRateLimit(store.getAll(), 60);
+    expect(result.total).toBe(1);
   });
 });
 
 describe("createRateLimitRequestsHandler", () => {
-  it("returns rate limit info with 200", () => {
-    const store = makeStore([{ timestamp: new Date().toISOString() }]);
-    const handler = createRateLimitRequestsHandler(store, { windowMs: 60000, maxRequests: 10 });
+  it("responds with 200 and JSON", () => {
+    const store = makeStore();
+    const handler = createRateLimitRequestsHandler(store);
+    const req = makeMockReq("/__hookdeck/rate-limit");
     const res = makeMockRes();
-    handler(makeMockReq(), res);
-    expect(res.statusCode).toBe(200);
-    const body = JSON.parse(res.body);
-    expect(body.maxRequests).toBe(10);
-    expect(body.windowMs).toBe(60000);
-    expect(typeof body.remaining).toBe("number");
+    handler(req, res);
+    expect((res.writeHead as ReturnType<typeof mock>).mock.calls[0][0]).toBe(200);
   });
 
-  it("returns 400 for invalid options", () => {
+  it("respects window query param", () => {
     const store = makeStore();
-    const handler = createRateLimitRequestsHandler(store, { windowMs: 0, maxRequests: 10 });
+    const handler = createRateLimitRequestsHandler(store);
+    const req = makeMockReq("/__hookdeck/rate-limit?window=300");
     const res = makeMockRes();
-    handler(makeMockReq(), res);
-    expect(res.statusCode).toBe(400);
+    handler(req, res);
+    const body = JSON.parse((res as any)._chunks[0]);
+    expect(body.window).toBe(300);
+  });
+
+  it("uses default window of 60 when not specified", () => {
+    const store = makeStore();
+    const handler = createRateLimitRequestsHandler(store);
+    const req = makeMockReq("/__hookdeck/rate-limit");
+    const res = makeMockRes();
+    handler(req, res);
+    const body = JSON.parse((res as any)._chunks[0]);
+    expect(body.window).toBe(60);
   });
 });
