@@ -57,3 +57,28 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
 
   return result.data;
 }
+
+/**
+ * Returns a redacted copy of the config safe for logging.
+ * Sensitive fields like URLs (which may contain tokens or credentials)
+ * are partially masked.
+ */
+export function redactConfig(config: Config): Record<string, unknown> {
+  const redactUrl = (url: string | undefined): string | undefined => {
+    if (!url) return url;
+    try {
+      const parsed = new URL(url);
+      if (parsed.password) parsed.password = '***';
+      if (parsed.username) parsed.username = '***';
+      return parsed.toString();
+    } catch {
+      return '***';
+    }
+  };
+
+  return {
+    ...config,
+    targetUrl: redactUrl(config.targetUrl),
+    hookdeckSourceUrl: redactUrl(config.hookdeckSourceUrl),
+  };
+}
